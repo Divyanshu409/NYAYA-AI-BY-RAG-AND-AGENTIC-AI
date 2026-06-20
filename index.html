@@ -10,8 +10,6 @@
   <style>
     /* ═══════════════════════════════════════════════
        INDIAN TRICOLOUR DESIGN SYSTEM
-       Saffron #FF9933 · White #FFFFFF · India Green #138808
-       Ashoka Chakra Navy #000080
     ═══════════════════════════════════════════════ */
     :root {
       /* Backgrounds — deep navy echoing Ashoka Chakra */
@@ -52,7 +50,7 @@
       color:var(--ink);
       min-height:100vh;
       overflow-x:hidden;
-      /* Safe area for iPhone notch / Dynamic Island / home bar */
+      
       padding-bottom:env(safe-area-inset-bottom,0px);
     }
 
@@ -419,7 +417,7 @@
     @keyframes spin{to{transform:rotate(360deg);}}
 
     /* ═══════════════════════════════════════
-       RESULTS — card-based redesign
+       RESULTS — card-based 
     ═══════════════════════════════════════ */
     #page-result{padding:76px 20px 80px;align-items:flex-start;justify-content:center;}
     #page-result .page-inner{max-width:860px;width:100%;}
@@ -731,7 +729,6 @@
     .ut-label{font-size:13px;font-weight:700;color:var(--ink);margin-bottom:1px;}
     .ut-when{font-family:'DM Mono',monospace;font-size:10.5px;color:var(--ink-3);}
 
-    /* ══ NEW DETAIL SECTIONS ══ */
 
     /* ── DOCUMENT CHECKLIST ── */
     .doc-list{display:flex;flex-direction:column;gap:7px;}
@@ -799,8 +796,7 @@
     .ctl-total-val{font-family:'DM Mono',monospace;font-size:14px;font-weight:700;color:var(--gold);}
 
     /* ═══════════════════════════════════════
-       RESPONSIVE — mobile-first breakpoints
-       ≤768px tablet · ≤480px phone
+       RESPONSIVE PAGE
     ═══════════════════════════════════════ */
     @media(max-width:768px){
       /* Nav */
@@ -1010,10 +1006,10 @@
       .action-step{padding:9px 10px;gap:8px;}
       .as-text{font-size:12.5px;}
 
-      /* Entity grid already goes 1-col via existing rule */
+      
     }
 
-    /* Touch-specific improvements */
+    
     @media(hover:none) and (pointer:coarse){
       .lang-card{-webkit-tap-highlight-color:transparent;}
       .lang-card:hover{transform:none;}
@@ -1028,7 +1024,7 @@
       .rb-toggle:active .rb-title{color:var(--gold);}
       .chat-fab:hover{transform:none;}
       .chat-fab:active{transform:scale(.94);}
-      /* Increase tap targets */
+    
       .lang-card{min-height:70px;}
       .ev-item,.step-item,.doc-item,.auth-card{cursor:default;}
       .ev-item,.doc-item{cursor:pointer;}
@@ -1037,8 +1033,7 @@
     @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;}}
 
     /* ══════════════════════════════════════
-       RESULT BLOCK — COLLAPSIBLE SECTIONS
-       (rb-* classes used by collapsible())
+       RESULT BLOCK 
     ══════════════════════════════════════ */
     .result-block{
       background:var(--bg-card);border:1px solid var(--border);
@@ -1188,7 +1183,7 @@
     .chat-send-btn{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--gold),#B8842D);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:opacity .15s;}
     .chat-send-btn:disabled{opacity:.4;cursor:not-allowed;}
 
-    /* ── IMPROVED RESULT HELPLINES ── */
+    /* ──  RESULT HELPLINES ── */
     .helpline-bar{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px;}
     .hl-chip{display:inline-flex;align-items:center;gap:6px;background:rgba(42,184,164,.1);border:1px solid rgba(42,184,164,.25);border-radius:99px;padding:6px 13px;font-size:12px;font-weight:700;color:var(--teal);}
     .hl-chip span{font-weight:400;color:var(--ink-3);}
@@ -1201,10 +1196,10 @@
     .ev-chip{background:rgba(232,148,58,.1);border:1px solid rgba(232,148,58,.25);border-radius:99px;padding:3px 10px;font-size:11.5px;color:var(--amber);}
 
     /* ══════════════════════════════════════════════
-       AGENTIC CHATBOT ENHANCEMENTS
+       AGENTIC CHATBOT 
     ══════════════════════════════════════════════ */
 
-    /* Panel size upgrade (desktop only) */
+    /* Panel size upgrade */
     @media(min-width:769px){.chat-panel{width:400px;max-height:620px;}}
 
     /* Agent status bar */
@@ -1270,7 +1265,7 @@
     .chat-escalate-btn:hover{background:rgba(224,84,84,.18);}
 
     /* ══════════════════════════════════════════════
-       ENHANCED OUTPUT / RESULT ANIMATIONS
+        OUTPUT / RESULT ANIMATIONS
     ══════════════════════════════════════════════ */
 
     /* Particle canvas overlay for result reveal */
@@ -1460,7 +1455,7 @@
 
 <script>
 /* ═══════════════════════════════════════════════
-   TRANSLATIONS (trimmed to essential keys)
+   TRANSLATIONS 
 ═══════════════════════════════════════════════ */
 const TR = {
   en:{
@@ -2370,8 +2365,6 @@ function delay(ms){return new Promise(r=>setTimeout(r,ms));}
 
 /* ═══════════════════════════════════════════════
    LAW KNOWLEDGE BASE
-   Full text + plain explanation for every law
-   the backend can return.
 ═══════════════════════════════════════════════ */
 const LAW_KB = {
 
@@ -2578,7 +2571,7 @@ const LAW_KB = {
   }
 };
 
-/* Look up a law by its reference string — fuzzy match */
+/* Look up a law by its reference string*/
 function lookupLaw(reference){
   if(!reference) return null;
   const key=Object.keys(LAW_KB).find(k=>
@@ -2590,7 +2583,7 @@ function lookupLaw(reference){
 }
 
 /* ═══════════════════════════════════════════════
-   RENDER RESULTS — redesigned
+   RENDER RESULTS — 
 ═══════════════════════════════════════════════ */
 const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const ea=v=>String(v??'').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -2957,7 +2950,7 @@ function renderResults(data){
 
   let html='';
 
-  /* ── Uncertainty banner ── */
+
   if(data.uncertainty_mode){
     html+=`<div class="unc-banner">
       <span style="font-size:18px;flex-shrink:0">⚠️</span>
@@ -2966,7 +2959,7 @@ function renderResults(data){
   }
 
   /* ══════════════════════════════════════════
-     HERO DASHBOARD — 4 cards + summary
+      DASHBOARD — 4 cards + summary
   ══════════════════════════════════════════ */
 
   /* — Case Summary card (full width) — */
@@ -3071,7 +3064,7 @@ function renderResults(data){
     </div>
   </div>`;
 
-  html+=`</div>`; /* end hero-dashboard */
+  html+=`</div>`; 
 
   /* ── Emergency helplines bar ── */
   const helplines=[];
@@ -3153,7 +3146,6 @@ function renderResults(data){
     ${rightsBody}
   </div>`;
 
-  /* RECOMMENDED NEXT STEPS — removed */
 
   /* ══════════════════════════════════
      SAFETY & PRIVACY ALERTS
@@ -3192,7 +3184,7 @@ function renderResults(data){
   }
 
   /* ══════════════════════════════════
-     WHAT WE DETECTED (ENTITY SUMMARY)
+     WHAT WE DETECTED 
   ══════════════════════════════════ */
   const entityFields=[
     {key:'ui_entity_money',  val:entities.money_amounts||[]},
@@ -3394,10 +3386,7 @@ function renderResults(data){
 buildExamples();
 
 /* ═══════════════════════════════════════════════
-   AGENTIC CHATBOT v2
-   — Intent detection, tool call display,
-     typewriter streaming, source drawer,
-     follow-up suggestions, urgency escalation
+   AGENTIC CHATBOT 
 ═══════════════════════════════════════════════ */
 (function(){
 
@@ -3520,11 +3509,7 @@ buildExamples();
     return /emergency|danger|threatening|attack|in prison|illegal detention|suicide|help me now|urgent/i.test(text);
   }
 
-  /* ── AGENT STEPS CONFIG ──
-     Mirrors the backend's agent_trace stages (rag_engine.agentic_chat_response):
-     plan -> search (1-3 of these) -> draft -> self_check.
-     showAgentSteps() maps trace step "search" entries onto the single
-     'search' stage chip, since there can be 1-3 of them. */
+  /* ── AGENT STEPS CONFIG ── */
   const AGENT_FLOW = [
     {id:'plan',       label:'Planning',       icon:'🧭'},
     {id:'search',     label:'Searching laws', icon:'📚'},
@@ -3545,11 +3530,7 @@ buildExamples();
     }).join('');
   }
 
-  /* ── TOOL CALL DISPLAY ──
-     appendToolCall: shows an in-progress row with a spinner.
-     resolveToolCall: marks it done (✓) or flagged (⚠️), optionally adding
-     a detail sub-line populated from the real agent_trace data
-     (e.g. "found 2 sources", "2 issues fixed"). */
+  /* ── TOOL CALL DISPLAY ── */
   function appendToolCall(icon, label, container){
     const el = document.createElement('div');
     el.className = 'tool-call-row';
@@ -3783,7 +3764,7 @@ buildExamples();
     sendBtn.disabled = true;
     chatLoading = true;
 
-    /* AGENT FLOW DISPLAY — container for the tool-call trace rows */
+    /* AGENT FLOW DISPLAY */
     const traceContainer = document.createElement('div');
     traceContainer.style.cssText='padding:0 12px;';
     messages.appendChild(traceContainer);
@@ -3863,7 +3844,7 @@ buildExamples();
       }
       showAgentSteps(4);
     } else {
-      /* Fallback (AGENTIC_CHAT=0, or fetch failed): generic 3-step display */
+      
       updateToolLabel(planTool, 'Classifying your situation…');
       await delay(300);
       resolveToolCall(planTool, null, 'ok');
