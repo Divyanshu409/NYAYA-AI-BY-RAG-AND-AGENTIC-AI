@@ -104,9 +104,7 @@ class AnalysisResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# RAG (Retrieval-Augmented Generation) schema
-# Extends AnalysisResponse with an AI-written explanation + the knowledge-base
-# sources it was grounded in. See rag_engine.py.
+# RAG (Retrieval-Augmented Generation) 
 # ---------------------------------------------------------------------------
 
 
@@ -116,9 +114,9 @@ class RagSource(BaseModel):
 
 
 class SelfCheckResult(BaseModel):
-    ok: Optional[bool] = None          # None = not run (no Gemini key)
+    ok: Optional[bool] = None         
     issues: List[str] = []
-    revised: bool = False              # True if the explanation was corrected
+    revised: bool = False              
 
 
 class RagAnalysisResponse(AnalysisResponse):
@@ -129,9 +127,7 @@ class RagAnalysisResponse(AnalysisResponse):
 
 
 # ===========================================================================
-#  REAL NLP — SECTION 1: LANGUAGE DETECTION
-#  Approach: Unicode block counting + script-ratio analysis + Hinglish markers
-#  This correctly identifies 8 Indian scripts without any external library.
+#   NLP 
 # ===========================================================================
 
 SCRIPT_TO_LANG: Dict[str, str] = {
@@ -158,7 +154,7 @@ HINGLISH_MARKERS = [
 NEGATION_TOKENS = {
     "not", "no", "never", "without", "nor", "neither",
     "nahi", "nahin", "nahi hai", "mat", "mत", "bina",
-    "نہیں",  # Urdu
+    "نہیں",  
 }
 NEGATION_UNICODE = {"नहीं", "न", "मत", "नहीं है", "बिना"}
 
@@ -541,7 +537,7 @@ _vec_char = TfidfVectorizer(
     ngram_range=(2, 4),
     sublinear_tf=True,
     max_features=80_000,
-    strip_accents=None,  # Preserve Devanagari/Tamil diacritics
+    strip_accents=None,  
 )
 
 # Word n-gram vectorizer: captures English and Romanized Hindi phrases
@@ -706,7 +702,7 @@ def classify_domains(
     q_char = _vec_char.transform([text])
     q_word = _vec_word.transform([text])
 
-    sim_char = cosine_similarity(q_char, _X_char)[0]  # shape: (n_domains,)
+    sim_char = cosine_similarity(q_char, _X_char)[0]  
     sim_word = cosine_similarity(q_word, _X_word)[0]
 
     # Weighted combination: char n-grams get more weight for Indic scripts
@@ -723,7 +719,7 @@ def classify_domains(
     # --- Step 4: Domain weight multiplier ---
     base_scores = base_scores * _domain_weight_vec
 
-    # --- Step 5: Build result list (threshold: score > 25) ---
+    # --- Step 5: Build result list ---
     threshold = 25.0
     scored = sorted(
         [(score, i) for i, score in enumerate(base_scores) if score >= threshold],
