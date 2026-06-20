@@ -1,37 +1,3 @@
-# ============================================================================
-# FIXED — PART 1 of 2 (data layer + retrieval engine)
-# ============================================================================
-# What changed vs. your original part_1.txt:
-#
-# 1. Dropped everything from `GEMINI_MODEL = os.environ.get(...)` onward
-#    (the old generate_explanation/_get_llm/_extract_json_object etc.).
-#    That code is fully superseded by Part 2's rewrite of the same names —
-#    Python keeps only the LAST definition of a name at module scope, so
-#    this half was dead weight that just made the file confusing. Part 2
-#    now contains the single, working copy of the orchestration layer,
-#    rewired to use the retrieve()/KnowledgeBaseRetriever defined below.
-#
-# 2. Fixed `correct_helplines={}` -> `correct_helplines=set()` in
-#    GOLD_DATASET. `{}` is an empty dict in Python, not an empty set —
-#    harmless here only because _compute_prf1() only ever checked
-#    truthiness/iterated it, but it's a latent type bug worth closing.
-#
-# 3. Fixed `_HELPLINE_PATTERN`: it required 4-5 digits after a leading "1",
-#    so it silently failed to detect "112" and "181" (the two most common
-#    emergency helplines in the whole gold set) and 6-digit codes like
-#    "155255". It also assumed every 1800-number splits as 3+4 digits, but
-#    your own KB text has 1800-11-4000 (2+4) and 1800-4254-732 (4+3). All
-#    confirmed with a standalone regex test before/after — see chat.
-#    Net effect of the old bug: hallucination_scores() was under-scoring
-#    recall on a big share of GOLD_DATASET cases that legitimately mention
-#    112/181, even when the model's answer was correct.
-#
-# Everything else below (KNOWLEDGE_BASE's 198 entries, GOLD_DATASET, the
-# TF-IDF char/word vectorizers, the ChromaDB hybrid retriever, retrieve(),
-# KnowledgeBaseRetriever) is unchanged — it was already correct and is the
-# thing Part 2's rewrite should have been calling all along.
-# ============================================================================
-
 from __future__ import annotations
 import hashlib
 import json
@@ -1189,8 +1155,6 @@ GOLD_DATASET: List[GoldCase] = [
 _HELPLINE_PATTERN = re.compile(
     # 3-digit emergency shortcodes — were missed entirely by the old 4-5 digit rule
     r"\b112\b|\b181\b"
-    # 1800 toll-free numbers — grouping in the KB text is inconsistent
-    # (e.g. 1800-11-4000 is 2+4 digits, 1800-4254-732 is 4+3), so allow either
     r"|\b1800[-\s]?\d{2,4}[-\s]?\d{3,4}\b"
     # other short/long helpline codes, e.g. 1098, 1930, 14433, 15100, 155255
     r"|\b1[0-9]{3,5}\b"
@@ -1288,7 +1252,7 @@ def cohens_kappa(ratings_a: List[int], ratings_b: List[int]) -> Optional[float]:
     )
 
     if expected_agree >= 1.0:
-        return None  # degenerate: all raters agree on all items by chance
+        return None  
 
     return round((observed_agree - expected_agree) / (1.0 - expected_agree), 4)
 
@@ -1302,7 +1266,6 @@ def kappa_across_cases(
     for dim in EVAL_DIMS:
         a = [s.get(dim, 0) for s in judge1_scores if dim in s]
         b = [s.get(dim, 0) for s in judge2_scores if dim in s]
-        # Align lengths (drop trailing if one list is longer due to failures)
         min_len = min(len(a), len(b))
         kappas[dim] = cohens_kappa(a[:min_len], b[:min_len])
     return kappas
@@ -1310,11 +1273,9 @@ def kappa_across_cases(
 
 
 # ---------------------------------------------------------------------------
-# EXTENDED KNOWLEDGE BASE — new entries added from new_kb_entries.py
-# (merged and de-duplicated by entry ID so the PDF and this list stay in sync)
+# KNOWLEDGE BASE 
 # ---------------------------------------------------------------------------
 
-# Knowledge base fully compiled at import time — 198 entries, 11 domains.
 KB_DOMAIN_IDS = sorted({e.domain for e in KNOWLEDGE_BASE} - {"general"})
 
 print(f"[rag_engine] Knowledge base loaded: {len(KNOWLEDGE_BASE)} entries "
@@ -1334,7 +1295,7 @@ _X_word = _vec_word.fit_transform(_kb_docs)
 CHROMA_PERSIST_DIR = os.environ.get("CHROMA_PERSIST_DIR", "./nyaya_chroma_db")
 CHROMA_COLLECTION  = "nyaya_kb"
 EMBED_MODEL_NAME   = os.environ.get("EMBED_MODEL", "all-MiniLM-L6-v2")
-HYBRID_ALPHA       = float(os.environ.get("HYBRID_ALPHA", "0.65"))  # semantic weight
+HYBRID_ALPHA       = float(os.environ.get("HYBRID_ALPHA", "0.65"))  
 
 _chroma_client: Optional[Any] = None
 _chroma_collection: Optional[Any] = None
@@ -1408,7 +1369,7 @@ def _semantic_scores(query: str, idx: List[int]) -> np.ndarray:
             where={"id": {"$in": allowed_ids}} if len(allowed_ids) < len(KNOWLEDGE_BASE) else None,
             include=["distances"],
         )
-        # ChromaDB returns distance (lower = closer for cosine); convert to similarity
+        # ChromaDB returns distance (lower = closer for cosine)
         dist_map: Dict[str, float] = {}
         if results["ids"] and results["ids"][0]:
             for rid, dist in zip(results["ids"][0], results["distances"][0]):
@@ -1467,31 +1428,7 @@ class KnowledgeBaseRetriever(BaseRetriever):
     ) -> List[Document]:
         results = retrieve(query, domain_ids=self.domain_ids, top_k=self.top_k)
         return [_entry_to_document(entry, score) for entry, score in results]
-# ============================================================================
-# FIXED — PART 2 of 2 (agentic orchestration layer)
-# Depends on Part 1 being loaded first (KNOWLEDGE_BASE, KB_DOMAIN_IDS,
-# retrieve(), KBEntry, etc.) — concatenate Part 1 + this file in order.
-# ============================================================================
-"""
-Nyaya AI – Complete Agentic RAG Engine (Gemini-powered)
-========================================================
-All-in-one file: KB loader, planner, rewriter, searcher,
-drafter, self-checker, evaluator, and the main chat entrypoint.
-Depends on Part 1 (KNOWLEDGE_BASE, KB_DOMAIN_IDS, retrieve()) being
-loaded first — this file does not duplicate that data/retrieval layer.
 
-Requirements:
-    pip install google-generativeai
-
-Set environment variable:
-    GEMINI_API_KEY=<your Gemini API key>
-"""
-
-
-
-# Accept GEMINI_API_KEY (also GOOGLE_API_KEY as a fallback alias). Never crash
-# the module if it's missing — generate_explanation() degrades gracefully
-# instead (see UNAVAILABLE_MESSAGE), same pattern as the rest of this app.
 _GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 if not _GEMINI_API_KEY:
     print("[rag_engine] GEMINI_API_KEY is not set — AI generation will be "
@@ -1504,7 +1441,7 @@ _gemini: Optional[Any] = None
 
 
 def _get_gemini_model() -> Optional[Any]:
-    """Lazily configure and build the Gemini client. Returns None if no key is set."""
+    
     global _gemini_configured, _gemini
     if _gemini is not None:
         return _gemini
@@ -1520,13 +1457,7 @@ def _get_gemini_model() -> Optional[Any]:
         return None
     
 def _parse_retry_delay_seconds(exc: Exception) -> Optional[float]:
-    """
-    Best-effort extraction of the server-suggested retry delay from a
-    Gemini error (e.g. {'status': 'RESOURCE_EXHAUSTED', ...,
-    'details': [..., {'@type': '...RetryInfo', 'retryDelay': '37s'}]}).
-    Falls back to scanning the stringified exception for "retryDelay": "Ns".
-    Returns None if no delay can be found.
-    """
+    
     msg = str(exc)
     match = re.search(r"retryDelay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)s", msg)
     if match:
@@ -1538,7 +1469,7 @@ def _parse_retry_delay_seconds(exc: Exception) -> Optional[float]:
 
 
 def _is_rate_limit_or_overload_error(exc: Exception) -> bool:
-    """True for 429 (quota/rate-limit) and 503 (overloaded) style errors."""
+    
     msg = str(exc)
     return (
         "429" in msg
@@ -1549,28 +1480,14 @@ def _is_rate_limit_or_overload_error(exc: Exception) -> bool:
     )
 
 
-# Retry policy for transient Gemini errors (429 rate-limit / 503 overloaded).
-# A run that hits these should wait it out and keep going rather than give up
-# after a single attempt — that's what was producing all-N/A eval reports.
+
 GEMINI_MAX_RETRIES: int = int(os.environ.get("GEMINI_MAX_RETRIES", "8"))
 GEMINI_BACKOFF_BASE_S: float = float(os.environ.get("GEMINI_BACKOFF_BASE_S", "2.0"))
 GEMINI_BACKOFF_MAX_S: float = float(os.environ.get("GEMINI_BACKOFF_MAX_S", "60.0"))
 
 
 def generate_explanation(prompt: str, temperature: float = 0.7) -> Optional[str]:
-    """
-    Call Gemini and return the text response, or None on failure.
-
-    Retries on rate-limit (429) and overload (503) errors instead of giving
-    up after one attempt:
-      - 429: sleeps for the server-suggested `retryDelay` if present,
-             otherwise falls back to exponential backoff.
-      - 503: exponential backoff (2s, 4s, 8s, ... capped at
-             GEMINI_BACKOFF_MAX_S).
-    Any other error (bad key, malformed prompt, etc.) fails immediately —
-    retrying those would just waste the budget on errors that can't resolve.
-    Override via GEMINI_MAX_RETRIES / GEMINI_BACKOFF_BASE_S / GEMINI_BACKOFF_MAX_S.
-    """
+   
     client = _get_gemini_model()
     if client is None:
         return None
@@ -1608,8 +1525,6 @@ def generate_explanation(prompt: str, temperature: float = 0.7) -> Optional[str]
 
 
 # ── Vector store / embeddings ─────────────────────────────────────────────────
-# Not needed here — KnowledgeBase (below) delegates to Part 1's hybrid
-# TF-IDF + ChromaDB retriever instead of maintaining a second, separate index.
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 MAX_REFINEMENT_ROUNDS: int = 2
@@ -1617,9 +1532,6 @@ MAX_TOTAL_PASSAGES: int = 12
 TOP_K_PASSAGES: int = 5
 
 VALID_AGENT_ACTIONS = {"answer", "clarify", "search"}
-# KB_DOMAIN_IDS comes from Part 1 (the real domains in KNOWLEDGE_BASE, e.g.
-# "criminal_law", "cyber_it", "family_personal" ...). It used to be clobbered
-# here with a hardcoded, mismatched placeholder set — removed.
 
 UNAVAILABLE_MESSAGE = (
     "I'm unable to generate a full AI response right now. "
@@ -1628,7 +1540,7 @@ UNAVAILABLE_MESSAGE = (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 1 — CORE LLM WRAPPER
+# SECTION 1 — CORE LLM 
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_rag_explanation(
@@ -1709,7 +1621,7 @@ Instructions:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 2 — KNOWLEDGE BASE  (simple in-memory vector store)
+# SECTION 2 — KNOWLEDGE BASE  
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Passage:
@@ -1720,18 +1632,7 @@ class Passage:
 
 
 class KnowledgeBase:
-    """
-    Adapter exposing a simple .search() interface for the orchestration layer.
-
-    This used to hold its own FAISS index that nothing ever populated
-    (load_knowledge_base() was never called in real use), so every search
-    silently returned []  and agentic_chat_response() always fell back to
-    "I couldn't find relevant information" — regardless of the question.
-
-    It now delegates to retrieve() from Part 1, which already runs the real
-    198-entry KNOWLEDGE_BASE through the working TF-IDF + ChromaDB hybrid
-    retriever. No separate loading step is needed.
-    """
+    
 
     def search(self, query: str, domain: Optional[str] = None, top_k: int = TOP_K_PASSAGES) -> List[Passage]:
         domain_ids = None if not domain or domain == "general" else [domain]
@@ -1888,10 +1789,7 @@ def _rewrite_queries(
     user_message: str,
     queries: List[Dict[str, str]],
 ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]]]:
-    """
-    Returns (expanded_queries, rewrite_log).
-    expanded_queries is a flat list of {query, domain} dicts.
-    """
+    
     prompt = _REWRITE_PROMPT.format(
         user_message=user_message,
         queries_json=json.dumps(queries, ensure_ascii=False, indent=2),
@@ -1931,10 +1829,7 @@ def _rewrite_queries(
 def _run_planned_searches(
     queries: List[Dict[str, str]],
 ) -> Tuple[List[Passage], List[Dict[str, Any]]]:
-    """
-    Run all queries against the KB and deduplicate results.
-    Returns (passages, search_trace).
-    """
+    
     seen_ids: set = set()
     all_passages: List[Passage] = []
     trace: List[Dict[str, Any]] = []
@@ -2142,18 +2037,7 @@ def agentic_chat_response(
     conversation: List[Dict[str, str]],
     domain_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Full agentic pipeline:
-        Plan → Decide → (Clarify | Search → Rewrite → Retrieve → Draft → Self-check loop)
-
-    Returns:
-        {
-            "response": str,
-            "sources":  [{"title": str, "domain": str}, ...],
-            "ai_available": bool,
-            "agent_trace": [...]
-        }
-    """
+   
     trace: List[Dict[str, Any]] = []
 
     # ── 1. PLAN ──────────────────────────────────────────────────────────────
@@ -2565,10 +2449,9 @@ def evaluate_rag_vs_baseline(
     # Devil's advocate judge (Gemini)
     devil = _call_gemini_judge(_EVAL_RUBRIC_DEVIL, shared) if use_devil_advocate else None
 
-    # Cross-family judge (OpenAI or Anthropic if available) — blind A/B
+    # Cross-family judge
     cross = None
     if use_cross_family:
-        # Randomly assign RAG/Baseline to A/B to reduce position bias
         import random
         if random.random() > 0.5:
             cf_kwargs = dict(user_text=user_text, context=context,
@@ -2599,8 +2482,6 @@ def evaluate_rag_vs_baseline(
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Smoke test against the REAL KNOWLEDGE_BASE from Part 1 — no separate
-    # loading step needed now that KnowledgeBase delegates to retrieve().
     test_query = "The police are refusing to register my FIR. What can I do?"
     print(f"\nQuery: {test_query}\n{'='*60}")
 
@@ -2676,18 +2557,17 @@ def evaluate_rag_vs_baseline(
     for i, p in enumerate(passages)
 ) if passages else "(no passages provided)"
  
-# After line 2602, add:
     kwargs = dict(
     user_text=user_text,
     context=context_str,
     rag_response=rag_response,
     baseline_response=baseline_response,
 )
-    # ── Gemini judges (same family as generator) ────────────────────────────
+    # ── Gemini judges ────────────────────────────
     j1 = _call_gemini_judge(_EVAL_RUBRIC, kwargs)
     j2 = _call_gemini_judge(_EVAL_RUBRIC_DEVIL, kwargs)
 
-    # ── Cross-family judge (blinded A/B) ────────────────────────────────────
+    # ── Cross-family judge  ────────────────────────────────────
     blind_kwargs, label_map = _blind_eval_kwargs(user_text, rag_response, baseline_response, context_str)
     j3_raw = _call_cross_family_judge(blind_kwargs)
     j3 = _deblind_cross_family_result(j3_raw, label_map) if j3_raw is not None else None
