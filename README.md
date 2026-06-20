@@ -1,4 +1,4 @@
-# ⚖️ NYAYA AI — RAG & Agentic AI for Civic Legal Awareness
+#  NYAYA AI — RAG & Agentic AI for Civic Legal Awareness
 
 NYAYA AI is a multilingual civic-awareness assistant that helps people in India understand their legal rights in plain language. It combines real NLP-based issue classification, retrieval-augmented generation (RAG) over a curated legal knowledge base, and an agentic chat flow — with a built-in evaluation suite to measure RAG quality against a baseline (no-retrieval) model.
 
@@ -6,7 +6,7 @@ NYAYA AI is a multilingual civic-awareness assistant that helps people in India 
 
 ---
 
-## ✨ Features
+##  Features
 
 - **Multilingual input detection** — Unicode script analysis across 8 Indian scripts (Devanagari, Bengali, Gurmukhi, Gujarati, Tamil, Telugu, Kannada, Malayalam) plus Hinglish detection, with no external language-detection library required.
 - **Rule + NLP-based issue classification** — TF-IDF semantic matching against a domain corpus (fundamental rights, consumer protection, labour law, cybercrime, etc.) to identify the most relevant legal domain(s) for a user's situation.
@@ -18,7 +18,7 @@ NYAYA AI is a multilingual civic-awareness assistant that helps people in India 
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 ┌─────────────┐      ┌──────────────────┐      ┌───────────────────┐
@@ -40,7 +40,7 @@ The Chroma vector store is **not** checked into the repo — it's rebuilt automa
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 | Layer | Technology |
 |---|---|
@@ -53,7 +53,7 @@ The Chroma vector store is **not** checked into the repo — it's rebuilt automa
 
 ---
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites
 - Python 3.11+
@@ -86,7 +86,7 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 .
@@ -100,7 +100,7 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
 ---
 
-## ⚠️ Limitations
+##  Limitations
 
 - Educational tool only — not a substitute for professional legal advice.
 - Risk/classification logic is rule + TF-IDF based, not a fine-tuned legal model.
@@ -108,6 +108,3 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
 ---
 
-## 📄 License
-
-Specify your preferred license here (e.g. MIT).
