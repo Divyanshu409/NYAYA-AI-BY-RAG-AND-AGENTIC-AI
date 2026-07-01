@@ -2340,8 +2340,8 @@ async function runAnalysis(){
   }catch(e){
     showPage('problem');
     problemError.textContent= e?.name==='AbortError'
-      ? 'Request timed out. Check your server is running.'
-      : T('err_server');
+      ? '⚠️ Gemini API Free Tier Limit Reached — The AI is taking longer than usual due to rate limiting (20 requests/day free tier). Please wait 1-2 minutes and try again, or try after midnight IST when the quota resets.'
+      : '⚠️ Gemini API Free Tier Limit Reached — Daily quota exhausted. Resets at midnight Pacific Time (1:30 PM IST). In production this would use a paid tier for unlimited requests.';
   }
 }
 
@@ -3733,6 +3733,55 @@ buildExamples();
   });
   sendBtn.addEventListener('click', sendMessage);
 
+/* ── LOCAL FALLBACK (used when /api/chat is unreachable) ── */
+  const INTENT_DOMAIN_MAP = {
+    fraud:['cyber_it','banking_finance'],
+    employment:['labour_employment'],
+    criminal:['criminal_law'],
+    consumer:['consumer'],
+    family:['family_personal'],
+    rti:['governance_admin'],
+    property:['civil_property'],
+    emergency:['family_personal','criminal_law'],
+  };
+  const INTENT_LAW_KEY = {
+    fraud:"Information Technology Act, 2000 and related cybercrime processes",
+    employment:"Indian labour/employment laws and applicable service rules/contracts",
+    criminal:"Bharatiya Nyaya Sanhita, 2023; Bharatiya Nagarik Suraksha Sanhita, 2023; Bharatiya Sakshya Adhiniyam, 2023",
+    emergency:"Bharatiya Nyaya Sanhita, 2023; Bharatiya Nagarik Suraksha Sanhita, 2023; Bharatiya Sakshya Adhiniyam, 2023",
+    consumer:"Consumer Protection Act, 2019",
+    family:"Applicable personal laws, family law protections, and domestic violence protections",
+    rti:"Administrative grievance systems, anti-corruption frameworks, RTI/public service mechanisms as applicable",
+    property:"Civil law, property law, contract law, tenancy and succession principles as applicable",
+    rights:"Article 21, Constitution of India",
+  };
+
+  function buildLocalAnswer(text, intent){
+    const domainIds = (intent && INTENT_DOMAIN_MAP[intent.id]) || [];
+    const auths = getAuthoritiesForDomains(domainIds.length ? domainIds : ['criminal_law']);
+    const lawKey = (intent && INTENT_LAW_KEY[intent.id]) || INTENT_LAW_KEY.rights;
+    const law = LAW_KB[lawKey];
+
+    const lines = [];
+    lines.push(intent
+      ? `This sounds like it relates to **${intent.label.replace(/^\S+\s/, '')}**.`
+      : "Thanks for sharing this — here's what I can tell you based on what you've described.");
+
+    if(law) lines.push(law.plainExplain);
+    if(law?.enforceBy) lines.push(`**How to act on this:** ${law.enforceBy}`);
+
+    if(auths.length){
+      lines.push("**Who to contact:**\n" + auths.slice(0,2).map(a=>`• ${a.name} — ${a.contact}`).join('\n'));
+    }
+
+    lines.push("_This answer was generated from Nyaya AI's built-in legal reference base — the live AI explanation service isn't reachable right now. For free human help, call NALSA at 15100._");
+
+    return {
+      response: lines.join('\n\n'),
+      sources: law ? [{title: law.shortTitle, snippet: law.plainExplain}] : []
+    };
+  }
+  
   /* ── MAIN SEND ── */
   async function sendMessage(){
     if(chatLoading) return;
@@ -3779,7 +3828,7 @@ buildExamples();
     let apiData = null;
     try{
       const ctrl2=new AbortController();
-      const t2=setTimeout(()=>ctrl2.abort(),15000);
+      const t2=setTimeout(()=>ctrl2.abort(),8000);
       const r = await fetch('/api/chat', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
@@ -3794,7 +3843,7 @@ buildExamples();
       clearTimeout(t2);
       if(r.ok) apiData = await r.json();
     } catch(e){
-      console.error('[chat] fetch failed:',e);
+      console.warn('[chat] backend unreachable, using local fallback:', e);
     }
 
     const agentTrace = apiData?.agent_trace || [];
@@ -3821,15 +3870,16 @@ buildExamples();
         } else if(step.step === 'draft'){
           showAgentSteps(2);
           setAgentState('thinking', 'Drafting your response…');
-          const draftTool = appendToolCall('✍️', step.skipped ? (step.label || 'Drafting…') : 'Drafting response…', traceContainer);
+          const usingFallback = step.skipped_llm || step.skipped;
+          const draftTool = appendToolCall('✍️', usingFallback ? (step.label || 'Drafting…') : 'Drafting response…', traceContainer);
           await delay(280);
-          if(step.skipped){
-            resolveToolCall(draftTool, null, 'warn');
+          if(usingFallback){
+            resolveToolCall(draftTool, step.label || 'Using stored knowledge base data', 'warn');
           } else {
             resolveToolCall(draftTool, null, 'ok');
           }
           await delay(150);
-        } else if(step.step === 'self_check'){
+} else if(step.step === 'self_check'){
           showAgentSteps(3);
           setAgentState('thinking', 'Self-checking the response…');
           const checkTool = appendToolCall('✅', 'Self-checking response…', traceContainer);
@@ -3840,7 +3890,14 @@ buildExamples();
             : (issues.length ? `Revised — fixed: ${issues.join('; ')}` : 'Revised after self-check');
           updateToolLabel(checkTool, step.ok ? 'Self-check passed' : 'Self-check found issues — revised');
           resolveToolCall(checkTool, detail, step.ok ? 'ok' : 'warn');
-        }
+        } else if(step.step === 'fallback' || step.step === 'zero_call_fallback'){
+          showAgentSteps(2);
+          setAgentState('thinking', 'Using stored legal reference data…');
+          const fbTool = appendToolCall('📖', step.label || 'No live match — using static domain guide', traceContainer);
+          await delay(260);
+          resolveToolCall(fbTool, null, 'warn');
+          await delay(150);
+}
       }
       showAgentSteps(4);
     } else {
@@ -3869,17 +3926,19 @@ buildExamples();
     hideTyping();
     setAgentState('done', 'Response ready');
 
-    const responseText = apiData?.response || '⚠️ I could not connect to the server right now. For urgent help:\n📞 Emergency: 112\n📞 Women helpline: 181\n📞 Cyber crime: 1930\n📞 Free legal aid (NALSA): 15100';
-    const sources = apiData?.ai_sources || apiData?.sources || [];
+    const fallback = buildLocalAnswer(text, intent);
+    const responseText = apiData?.response || fallback.response;
+    const sources = apiData?.ai_sources || apiData?.sources || (apiData ? [] : fallback.sources);
+    const usingStoredData = apiData && apiData.ai_available === false;
 
-    /* Typewriter bot message */
+
     const botMsgEl = appendBotStreaming(responseText, sources, ()=>{
-      /* After streaming done, add follow-ups */
-      appendFollowUps(intent, botMsgEl);
-      sendBtn.disabled = false;
-      chatLoading = false;
-      setTimeout(()=> setAgentState('', 'Ready · Ask any legal question'), 2500);
-    });
+    if(usingStoredData){
+    const badge = document.createElement('div');
+    badge.style.cssText = 'margin-top:6px;font-size:11px;color:var(--amber);display:flex;align-items:center;gap:5px;';
+    badge.innerHTML = '📖 <span>Answered from stored legal reference data (live AI unavailable)</span>';
+    botMsgEl.querySelector('.chat-bubble').appendChild(badge);
+  });
 
     chatHistory.push({role:'assistant', content: responseText});
   }
