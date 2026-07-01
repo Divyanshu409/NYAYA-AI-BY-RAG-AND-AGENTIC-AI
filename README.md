@@ -15,7 +15,7 @@ NYAYA AI is a multilingual civic-awareness assistant that helps people in India 
 - **Self-verification** — RAG explanations are automatically self-checked for factual consistency against retrieved sources before being returned.
 - **Built-in evaluation framework** — Compares RAG vs. baseline (no-retrieval) responses across grounding, actionability, hallucination, and relevance, using dual LLM judges with Cohen's kappa inter-rater reliability, plus a regex-based hallucination F1 score against a gold dataset.
 - **Risk & entity extraction** — Flags risk level (low/medium/high) and pulls out money amounts, dates, locations, organizations, and evidence indicators from free-text complaints.
-
+- Handled Gemini API rate-limit/downtime failures by adding a local knowledge-base fallback, so the app answers reliably instead of showing a connection error.
 ---
 
 ##  Architecture
