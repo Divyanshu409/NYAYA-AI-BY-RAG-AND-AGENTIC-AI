@@ -6,6 +6,7 @@ import random
 import re
 import statistics
 import time
+import threading
 from google import genai
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -1281,6 +1282,44 @@ KB_DOMAIN_IDS = sorted({e.domain for e in KNOWLEDGE_BASE} - {"general"})
 print(f"[rag_engine] Knowledge base loaded: {len(KNOWLEDGE_BASE)} entries "
       f"across {len(KB_DOMAIN_IDS)} domains.")
 
+@dataclass
+class _CacheEntry:
+    payload: Dict[str, Any]
+    ts: float = field(default_factory=time.time)
+
+
+class _ResponseCache:
+    def __init__(self, ttl: int = 3600):
+        self._store: Dict[str, _CacheEntry] = {}
+        self._lock = threading.Lock()
+        self._ttl = ttl
+
+    def _key(self, text: str) -> str:
+        return hashlib.sha256(text.strip().lower().encode()).hexdigest()
+
+    def get(self, text: str) -> Optional[Dict[str, Any]]:
+        k = self._key(text)
+        with self._lock:
+            entry = self._store.get(k)
+            if entry and (time.time() - entry.ts) < self._ttl:
+                return entry.payload
+            if entry:
+                del self._store[k]
+        return None
+
+    def set(self, text: str, payload: Dict[str, Any]) -> None:
+        k = self._key(text)
+        with self._lock:
+            self._store[k] = _CacheEntry(payload=payload)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._store.clear()
+
+
+_cache = _ResponseCache(ttl=int(os.environ.get("RESPONSE_CACHE_TTL", "3600")))
+
+
 _kb_docs = [e.content for e in KNOWLEDGE_BASE]
 
 _vec_char = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4),
@@ -1526,12 +1565,195 @@ def generate_explanation(prompt: str, temperature: float = 0.7) -> Optional[str]
 
 # ── Vector store / embeddings ─────────────────────────────────────────────────
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+_AGENTIC_MODE: bool = True
+_SKIP_REWRITE: bool = os.environ.get("GEMINI_REWRITE", "0") != "1"
+_SKIP_SELF_CHECK: bool = os.environ.get("GEMINI_SELF_CHECK", "0") != "1"
+
+_LITE_SYSTEM = """\
+You are Nyaya AI, a practical legal-awareness assistant for India.
+You are NOT a lawyer, court, or government body.
+
+IMPORTANT RULES:
+- Answer ONLY using the KNOWLEDGE BASE CONTEXT below.
+- Do NOT invent section numbers, helplines, court names, or laws not in context.
+- Be practical and warm. Use simple everyday language.
+- Structure your answer in 3–4 short paragraphs:
+  (1) What law/right applies
+  (2) Immediate next steps (be specific)
+  (3) Evidence to preserve
+  (4) Urgency note + helpline(s) from context
+
+End with exactly this line:
+"This is general educational information, not legal advice. Free legal aid: NALSA 15100."
+
+KNOWLEDGE BASE CONTEXT:
+{context}
+
+USER SITUATION:
+{user_message}
+"""
+
+_LITE_HISTORY_SYSTEM = """\
+You are Nyaya AI, a practical legal-awareness assistant for India.
+You are NOT a lawyer, court, or government body.
+
+CONVERSATION SO FAR:
+{history}
+
+KNOWLEDGE BASE CONTEXT:
+{context}
+
+NEW USER MESSAGE:
+{user_message}
+
+Answer the new message using ONLY the context above. Be specific, warm, and practical.
+End with: "This is general educational information, not legal advice. Free legal aid: NALSA 15100."
+"""
+
+
 MAX_REFINEMENT_ROUNDS: int = 2
 MAX_TOTAL_PASSAGES: int = 12
 TOP_K_PASSAGES: int = 5
 
 VALID_AGENT_ACTIONS = {"answer", "clarify", "search"}
+
+_EMERGENCY_FOOTER = (
+    "\n\n---\n"
+    "📞 **Emergency helplines (always free):**\n"
+    "- Police emergency: **112**\n"
+    "- Women helpline: **181**\n"
+    "- Child helpline: **1098**\n"
+    "- Free legal aid (NALSA): **15100**\n"
+    "- Cyber crime: **1930** / cybercrime.gov.in\n"
+    "- Senior citizen: **14567**\n\n"
+    "*This is general educational information, not legal advice.*"
+)
+
+_DOMAIN_STATIC: Dict[str, str] = {
+    "cyber_it": (
+        "**Cyber crime detected in your situation.**\n\n"
+        "**Immediate steps:**\n"
+        "1. Call **1930** (Cyber Crime Helpline, 24x7) right now\n"
+        "2. File online at **cybercrime.gov.in** (available 24x7, no police visit needed)\n"
+        "3. Screenshot all evidence BEFORE doing anything else\n"
+        "4. Call your bank immediately to block the transaction if money was lost\n\n"
+        "**Evidence to save:** Transaction IDs, screenshots of messages, "
+        "fraudster's UPI ID/phone number, call recordings.\n\n"
+        "**Key rule:** Report within 3 working days for zero bank liability (RBI rule)."
+    ),
+    "banking_finance": (
+        "**Banking or financial fraud situation.**\n\n"
+        "**Immediate steps:**\n"
+        "1. Call your bank's 24x7 helpline to block transactions\n"
+        "2. File complaint at **cms.rbi.org.in** (RBI Ombudsman — free, no lawyer)\n"
+        "3. For UPI fraud: also call **1930** and report at cybercrime.gov.in\n\n"
+        "**Your rights:** Under RBI rules, if you report within 3 working days "
+        "and it wasn't your negligence, your liability is ZERO.\n\n"
+        "**Evidence:** Bank statement, SMS alerts, transaction UTR number."
+    ),
+    "criminal_law": (
+        "**Criminal matter — you have clear legal rights.**\n\n"
+        "**Immediate steps:**\n"
+        "1. Call **112** if you are in immediate danger\n"
+        "2. Go to the nearest police station and file an FIR\n"
+        "3. A Zero FIR can be filed at ANY station regardless of jurisdiction\n"
+        "4. Police MUST give you a free copy of the FIR\n\n"
+        "**If police refuse to register FIR:** Write to the Superintendent of Police "
+        "by registered post — this is illegal under S.154 BNSS.\n\n"
+        "**Free legal aid:** Call NALSA at **15100** (free lawyer in your district)."
+    ),
+    "labour_employment": (
+        "**Labour rights situation.**\n\n"
+        "**Immediate steps:**\n"
+        "1. Send a written demand letter to HR by registered post (keep a copy)\n"
+        "2. File online at **shramsuvidha.gov.in** (select your state and issue)\n"
+        "3. Walk into the local Labour Commissioner office with your appointment "
+        "letter, salary slips, and any HR communications\n\n"
+        "**For PF issues:** Call EPF helpline **1800-118-005** (toll-free) or "
+        "file at epfigms.gov.in\n\n"
+        "**Key law:** Code on Wages 2020 — your employer must pay within 7th/10th "
+        "of the next month."
+    ),
+    "consumer": (
+        "**Consumer rights situation.**\n\n"
+        "**Immediate steps:**\n"
+        "1. Send a written complaint to the company first (keep proof)\n"
+        "2. If unresolved in 15–30 days, file at **e-daakhil.nic.in** (no lawyer needed)\n"
+        "3. Call National Consumer Helpline: **1800-11-4000** or **1915** (toll-free)\n\n"
+        "**Which Commission:** District (claims up to ₹50 lakh) → "
+        "State (₹50L–₹2Cr) → National NCDRC (above ₹2Cr)\n\n"
+        "**You can claim:** Refund + replacement + compensation for mental agony + "
+        "court costs. File within 2 years of the incident."
+    ),
+    "family_personal": (
+        "**Family/domestic situation — immediate support available.**\n\n"
+        "**Immediate steps:**\n"
+        "1. Call **181** (Women Helpline, 24x7) or **112** for emergencies\n"
+        "2. Visit the nearest One Stop Centre (Sakhi Centre) — "
+        "free shelter, legal aid, and counselling\n"
+        "3. File an application under the Domestic Violence Act before a "
+        "Magistrate directly — no lawyer required\n\n"
+        "**Your rights under PWDVA 2005:** Protection Order, Residence Order "
+        "(you can stay in the shared home), and Monetary Relief.\n\n"
+        "**Free legal aid:** NALSA **15100** — free lawyer for women in DV cases."
+    ),
+    "fundamental_rights": (
+        "**Fundamental Rights violation detected.**\n\n"
+        "**Immediate steps:**\n"
+        "1. File a complaint with the National Human Rights Commission: "
+        "**14433** / nhrc.nic.in (online, no lawyer needed)\n"
+        "2. For illegal detention: File Habeas Corpus petition in the High Court\n"
+        "3. For SC/ST discrimination: Call helpline **14566**\n\n"
+        "**Your rights:** Under Article 22, you cannot be held more than 24 hours "
+        "without a magistrate. You must be told why you are arrested.\n\n"
+        "**Free legal aid:** NALSA **15100** — free representation for rights violations."
+    ),
+    "governance_admin": (
+        "**Government/administrative issue.**\n\n"
+        "**Immediate steps:**\n"
+        "1. File an RTI at **rtionline.gov.in** (₹10 fee, response within 30 days)\n"
+        "2. For corruption/bribe demand: Report to CVC at **cvc.gov.in**\n"
+        "3. For police refusing FIR: Write to Superintendent of Police by registered post\n\n"
+        "**Escalation:** CM Helpline (most states: 1076) → Lokpal "
+        "(lokpal.nic.in for central govt) → State Lokayukta\n\n"
+        "**Whistleblower protection:** Whistle Blowers Protection Act 2014 "
+        "protects those who report corruption."
+    ),
+    "civil_property": (
+        "**Property/civil dispute.**\n\n"
+        "**Immediate steps:**\n"
+        "1. Send a written legal notice to the other party by registered post\n"
+        "2. For illegal eviction/lockout: File FIR under BNS Section 329 (criminal trespass)\n"
+        "3. Verify property records at your state's land portal (Bhulekh/Bhoomi/Dharani)\n\n"
+        "**Security deposit:** Landlord must return within 1 month under "
+        "Model Tenancy Act 2021. Approach Rent Tribunal if denied.\n\n"
+        "**Free legal aid:** NALSA **15100** for property disputes involving poor/marginalized."
+    ),
+    "education": (
+        "**Education rights situation.**\n\n"
+        "**Immediate steps:**\n"
+        "1. For ragging: Call Anti-Ragging Helpline **1800-180-5522** (toll-free, 24x7, anonymous)\n"
+        "2. For withheld certificate: File complaint at the UGC portal "
+        "(grievance.ugc.ac.in) or AICTE portal\n"
+        "3. For fee disputes: File consumer complaint at **e-daakhil.nic.in**\n\n"
+        "**RTE Act:** Children 6–14 have right to free education. "
+        "No expulsion before Class 8. No screening at admission.\n\n"
+        "**Scholarships delayed:** Check status at scholarships.gov.in."
+    ),
+    "general": (
+        "**Here are your immediate next steps:**\n\n"
+        "1. **Document everything:** WHO was involved, WHAT happened, WHEN, WHERE, "
+        "evidence (screenshots, messages, photos)\n"
+        "2. **Emergency:** Call **112** if anyone is in danger right now\n"
+        "3. **Free legal help:** Call NALSA at **15100** — they connect you to a "
+        "free lawyer in your district\n"
+        "4. **Women in danger:** Call **181** (24x7)\n"
+        "5. **Children:** Call CHILDLINE **1098** (24x7)\n\n"
+        "Visit your nearest District Legal Services Authority (DLSA) — "
+        "every district has one — for a free in-person consultation."
+    ),
+}
+
 
 UNAVAILABLE_MESSAGE = (
     "I'm unable to generate a full AI response right now. "
@@ -1542,6 +1764,129 @@ UNAVAILABLE_MESSAGE = (
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 1 — CORE LLM 
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _build_lite_prompt(
+    user_message: str,
+    passages: List[Tuple[KBEntry, float]],
+    conversation: Optional[List[Dict[str, str]]] = None,
+) -> str:
+    context = "\n\n".join(
+        f"[{i+1}] {entry.title}\n{entry.content}"
+        for i, (entry, _) in enumerate(passages)
+    )
+    if not context:
+        context = "(No specific passages found. Use general Indian legal knowledge.)"
+
+    if conversation and len(conversation) >= 2:
+        history_lines = []
+        for msg in conversation[-4:]:
+            role = msg.get("role", "user").capitalize()
+            history_lines.append(f"{role}: {msg.get('content', '').strip()}")
+        return _LITE_HISTORY_SYSTEM.format(
+            history="\n".join(history_lines),
+            context=context,
+            user_message=user_message,
+        )
+
+    return _LITE_SYSTEM.format(context=context, user_message=user_message)
+
+
+def lite_chat_response(
+    user_message: str,
+    conversation: Optional[List[Dict[str, str]]] = None,
+    domain_hint: Optional[str] = None,
+) -> Dict[str, Any]:
+    conversation = conversation or []
+
+    cached = _cache.get(user_message)
+    if cached:
+        cached["from_cache"] = True
+        return cached
+
+    domain_ids = [domain_hint] if domain_hint and domain_hint in KB_DOMAIN_IDS else None
+    passages = retrieve(user_message, domain_ids=domain_ids, top_k=TOP_K_PASSAGES)
+
+    prompt = _build_lite_prompt(user_message, passages, conversation)
+    answer = generate_explanation(prompt, temperature=0.65)
+
+    if answer is None:
+        result = _zero_call_fallback(user_message, domain_hint, passages)
+        _cache.set(user_message, result)
+        return result
+
+    sources = [
+        {
+            "title": entry.title,
+            "domain": entry.domain,
+            "snippet": entry.content[:200] + "…" if len(entry.content) > 200 else entry.content,
+        }
+        for entry, _ in passages[:3]
+    ]
+
+    result = {
+        "response": answer,
+        "sources": sources,
+        "ai_available": True,
+        "fallback_used": False,
+        "from_cache": False,
+        "agent_trace": [
+            {"step": "retrieve", "label": f"Retrieved {len(passages)} passages via TF-IDF"},
+            {"step": "draft", "label": "Single Gemini call (lite mode)"},
+        ],
+    }
+
+    _cache.set(user_message, result)
+    return result
+
+def _zero_call_fallback(
+    user_message: str,
+    domain_hint: Optional[str] = None,
+    passages=None,
+) -> Dict[str, Any]:
+    snippet_parts: List[str] = []
+    if passages:
+        for p in passages[:3]:
+            if isinstance(p, tuple):
+                entry, score = p
+                title, content = entry.title, entry.content
+            else:  # Passage object from agentic path
+                title = p.metadata.get("title", "")
+                content = p.page_content
+            snippet_parts.append(f"**{title}**\n{content[:350]}…")
+
+    if snippet_parts:
+        body = (
+            "Based on our knowledge base, here is what's relevant to your situation:\n\n"
+            + "\n\n---\n\n".join(snippet_parts)
+        )
+    else:
+        domain = domain_hint or "general"
+        if domain not in _DOMAIN_STATIC:
+            domain = "general"
+        body = _DOMAIN_STATIC[domain]
+
+    response_text = body + _EMERGENCY_FOOTER
+
+    sources = []
+    if passages:
+        for p in passages[:3]:
+            if isinstance(p, tuple):
+                entry, _score = p
+                sources.append({"title": entry.title, "domain": entry.domain,
+                                 "snippet": entry.content[:150] + "…"})
+            else:
+                sources.append({"title": p.metadata.get("title", ""),
+                                 "domain": p.metadata.get("domain", ""),
+                                 "snippet": p.page_content[:150] + "…"})
+
+    return {
+        "response": response_text,
+        "sources": sources,
+        "ai_available": False,
+        "fallback_used": True,
+        "agent_trace": [{"step": "zero_call_fallback",
+                         "label": "Gemini unavailable — used local KB + static guide"}],
+    }
 
 def get_rag_explanation(
     user_text: str,
@@ -2100,13 +2445,13 @@ def agentic_chat_response(
     sources = _passages_to_sources(passages)
 
     if not passages:
-        response_text = (
-            "I couldn't find relevant information in the Nyaya AI knowledge base. "
-            "For free legal aid, call NALSA: **15100**. "
-            "For emergencies, call **112**."
-        )
-        trace.append({"step": "draft", "label": "No relevant material found", "skipped": True})
-        return {"response": response_text, "sources": [], "ai_available": False, "agent_trace": trace}
+        trace.append({
+            "step": "fallback",
+            "label": "No KB passages matched — using static domain guide",
+        })
+        result = _zero_call_fallback(user_message, domain_hint)
+        result["agent_trace"] = trace + result.get("agent_trace", [])
+        return result
 
     # ── 5. DRAFT → SELF-CHECK → GAP-FILL LOOP ───────────────────────────────
     seen_passage_ids: set = {p.metadata.get("id", id(p)) for p in passages}
@@ -2120,21 +2465,33 @@ def agentic_chat_response(
         draft = generate_explanation(prompt)
 
         if draft is None:
-            # Graceful degradation: show raw snippets
-            snippets = "\n\n".join(
-                f"**{p.metadata.get('title','')}**: {p.page_content[:250]}…"
-                for p in passages[:2]
+            trace.append({
+                "step": "draft",
+                "label": "Gemini unavailable — falling back to stored KB data (agentic trace preserved)",
+                "refinement_round": round_num,
+                "skipped_llm": True,
+            })
+
+            snippet_parts = [
+                f"**{p.metadata.get('title','')}**\n{p.page_content[:350]}…"
+                for p in passages[:3]
+            ]
+            domain = domain_hint or (passages[0].metadata.get("domain") if passages else "general")
+            if domain not in _DOMAIN_STATIC:
+                domain = "general"
+
+            response_text = (
+                "Based on our knowledge base, here is what's relevant to your situation:\n\n"
+                + "\n\n---\n\n".join(snippet_parts)
+                + "\n\n" + _DOMAIN_STATIC[domain]
+                + _EMERGENCY_FOOTER
             )
-            trace.append({"step": "draft", "label": "AI unavailable — used reference snippets", "skipped": True})
+
             return {
-                "response": (
-                    "I can't generate a full AI response right now. "
-                    "Here's what our knowledge base says:\n\n"
-                    + snippets
-                    + "\n\nFor personalised help, call NALSA: **15100**."
-                ),
+                "response": response_text,
                 "sources": sources,
                 "ai_available": False,
+                "fallback_used": True,
                 "agent_trace": trace,
             }
 
@@ -2420,29 +2777,6 @@ def _call_cross_family_judge(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]
     print(f"[judge] Cross-family judge ({family}) failed after {GEMINI_MAX_RETRIES} retries: {last_exc}")
     return None
 
-
-def evaluate_rag_vs_baseline(
-    user_text: str,
-    rag_response: str,
-    baseline_response: str,
-    passages: List[Passage],
-    use_devil_advocate: bool = True,
-    use_cross_family: bool = True,
-) -> Dict[str, Any]:
-    """
-    Run the full evaluation suite and return aggregated scores.
-    """
-    context = "\n\n".join(
-        f"[{i+1}] {p.metadata.get('title','')}\n{p.page_content[:500]}"
-        for i, p in enumerate(passages)
-    )
-    shared = dict(
-        user_text=user_text,
-        rag_response=rag_response,
-        baseline_response=baseline_response,
-        context=context,
-    )
-
     # Standard judge (Gemini)
     standard = _call_gemini_judge(_EVAL_RUBRIC, shared)
 
@@ -2480,20 +2814,33 @@ def evaluate_rag_vs_baseline(
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 14 — SAMPLE USAGE / QUICK TEST
 # ─────────────────────────────────────────────────────────────────────────────
+def chat(
+    user_message: str,
+    conversation: Optional[List[Dict[str, str]]] = None,
+    domain_hint: Optional[str] = None,
+) -> Dict[str, Any]:
+    if _AGENTIC_MODE:
+        return agentic_chat_response(user_message, conversation or [], domain_hint)
 
 if __name__ == "__main__":
-    test_query = "The police are refusing to register my FIR. What can I do?"
-    print(f"\nQuery: {test_query}\n{'='*60}")
+    print("=" * 60)
+    print("MODE:", "AGENTIC (3 calls)" if _AGENTIC_MODE else "LITE (1 call)")
+    print("=" * 60)
 
-    result = agentic_chat_response(
-        user_message=test_query,
-        conversation=[],
-        domain_hint="criminal_law",
-    )
+    test_queries = [
+        "Police are refusing to register my FIR. What can I do?",
+        "My employer has not paid salary for 3 months.",
+        "Someone hacked my UPI and took ₹20,000.",
+    ]
 
-    print("RESPONSE:\n", result["response"])
-    print("\nSOURCES:", result["sources"])
-    print("\nAGENT TRACE STEPS:", [t["step"] for t in result["agent_trace"]])
+    for q in test_queries:
+        print(f"\nQ: {q}")
+        result = chat(q, conversation=[], domain_hint=None)
+        print(f"AI Available: {result['ai_available']}")
+        print(f"Fallback Used: {result.get('fallback_used', False)}")
+        print(f"From Cache: {result.get('from_cache', False)}")
+        print(f"Response (first 300 chars):\n{result['response'][:300]}…")
+        print("-" * 40)
 
 def _blind_eval_kwargs(
     user_text: str,
@@ -2669,7 +3016,6 @@ def evaluate_rag_vs_baseline(
         "cross_family_judge": _get_cross_family_judge_name(),
         "blind_label_map": label_map,
     }
-
 
 
 def run_evaluation_suite(
